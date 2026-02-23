@@ -12717,6 +12717,8 @@ void zone_activity_actor::do_turn( player_activity &act, Character &you )
 
     //Prepare activity stage
     if( stage == UNINIT ) {
+        // Fresh start: ensure flood cache reflects the current map.
+        zone_sorting::invalidate_flood_cache();
         stage = INIT;
     }
     if( stage == INIT ) {
@@ -12830,72 +12832,45 @@ bool zone_sort_activity_actor::stage_think( player_activity &act, Character &you
     last_think_grab_type = cur_grab_type;
     last_think_grab_point = cur_grab_point;
 
-    // Sort sources by A* route distance. Pre-sort by Chebyshev (lower bound),
-    // compute A* lazily, stop when chebyshev > best_route + 1.
-    // Tiles past the cutoff are appended in Chebyshev order as fallback.
+    // Sort sources by Dijkstra flood distance (real route cost, computed once).
     std::vector<std::pair<int, tripoint_abs_ms>> candidates;
     candidates.reserve( coord_set.size() );
+    std::vector<tripoint_abs_ms> oob_tiles;
+    std::vector<tripoint_abs_ms> cross_z_tiles;
+
     for( const tripoint_abs_ms &p : coord_set ) {
         if( unreachable_sources.count( p ) ) {
             continue;
         }
-        candidates.emplace_back( square_dist( you.pos_abs(), p ), p );
+        const tripoint_bub_ms p_bub = here.get_bub( p );
+        if( !here.inbounds( p_bub ) ) {
+            oob_tiles.emplace_back( p );
+            continue;
+        }
+        if( p_bub.z() != you.pos_bub().z() ) {
+            cross_z_tiles.emplace_back( p );
+            continue;
+        }
+        const int d = zone_sorting::flood_distance( you, p_bub );
+        if( d == INT_MAX ) {
+            unreachable_sources.emplace( p );
+            continue;
+        }
+        candidates.emplace_back( d, p );
     }
+
     std::sort( candidates.begin(), candidates.end(),
     []( const std::pair<int, tripoint_abs_ms> &a, const std::pair<int, tripoint_abs_ms> &b ) {
         return a.first < b.first;
     } );
 
-    std::vector<std::pair<int, tripoint_abs_ms>> computed;
-    computed.reserve( candidates.size() );
-    std::vector<tripoint_abs_ms> oob_tiles; // out-of-bounds, handled by iteration loop
-    int best_route = INT_MAX;
-    size_t cutoff = candidates.size();
-
-    for( size_t i = 0; i < candidates.size(); i++ ) {
-        const int cheb = candidates[i].first;
-        if( best_route != INT_MAX && cheb > best_route + 1 ) {
-            cutoff = i;
-            break;
-        }
-        const tripoint_bub_ms p_bub = here.get_bub( candidates[i].second );
-        if( !here.inbounds( p_bub ) ) {
-            // Skip OOB tiles here - route_with_grab can't clip them.
-            // The iteration loop's !inbounds() handler will route closer.
-            oob_tiles.emplace_back( candidates[i].second );
-            continue;
-        }
-        if( cheb <= 1 ) {
-            // Already adjacent - no pathfinding needed
-            computed.emplace_back( 0, candidates[i].second );
-            best_route = 0;
-        } else {
-            const int dist = zone_sorting::route_length( you, p_bub );
-            if( dist == INT_MAX ) {
-                unreachable_sources.emplace( candidates[i].second );
-                continue;
-            }
-            computed.emplace_back( dist, candidates[i].second );
-            best_route = std::min( best_route, dist );
-        }
-    }
-
-    // Sort the computed portion by actual route distance
-    std::sort( computed.begin(), computed.end(),
-    []( const std::pair<int, tripoint_abs_ms> &a, const std::pair<int, tripoint_abs_ms> &b ) {
-        return a.first < b.first;
-    } );
-
-    // Build final list: route-sorted, then remaining in Chebyshev order, then OOB tiles
     std::vector<tripoint_abs_ms> src_sorted;
-    src_sorted.reserve( candidates.size() );
-    for( const auto &entry : computed ) {
+    src_sorted.reserve( candidates.size() + cross_z_tiles.size() + oob_tiles.size() );
+    for( const auto &entry : candidates ) {
         src_sorted.emplace_back( entry.second );
     }
-    for( size_t i = cutoff; i < candidates.size(); i++ ) {
-        if( !unreachable_sources.count( candidates[i].second ) ) {
-            src_sorted.emplace_back( candidates[i].second );
-        }
+    for( const tripoint_abs_ms &p : cross_z_tiles ) {
+        src_sorted.emplace_back( p );
     }
     for( const tripoint_abs_ms &p : oob_tiles ) {
         src_sorted.emplace_back( p );
@@ -12957,6 +12932,7 @@ bool zone_sort_activity_actor::stage_think( player_activity &act, Character &you
             if( !zone_sorting::route_to_destination( you, act, src_bub, stage ) ) {
                 add_msg_debug( debugmode::DF_ACTIVITY,
                                "zone_sort THINK: route to source FAILED, trying next" );
+                unreachable_sources.emplace( src );
                 continue;
             }
             return false;
@@ -13127,8 +13103,9 @@ void zone_sort_activity_actor::stage_do( player_activity &act, Character &you )
         if( !picked_up_stuff.empty() && !dropoff_coords.empty() &&
             !you.has_destination() && square_dist( you.pos_bub(), src_bub ) > 1 ) {
             std::sort( dropoff_coords.begin(), dropoff_coords.end(),
-            [&abspos]( const tripoint_abs_ms & a, const tripoint_abs_ms & b ) {
-                return square_dist( abspos, a ) < square_dist( abspos, b );
+            [&you, &here]( const tripoint_abs_ms & a, const tripoint_abs_ms & b ) {
+                return zone_sorting::flood_distance( you, here.get_bub( a ) )
+                       < zone_sorting::flood_distance( you, here.get_bub( b ) );
             } );
 
             bool routed = false;
@@ -13301,37 +13278,36 @@ void zone_sort_activity_actor::stage_do( player_activity &act, Character &you )
             }
         }
 
-        // For first item: build dropoff_coords with route probing before pickup.
+        // For first item: build dropoff_coords with flood distance probing before pickup.
         // Always rebuild - previous item may have failed pickup and left stale coords.
-        // Sort by Chebyshev distance first so nearby destinations are probed
-        // first (populates route cache for later route_to_destination calls).
         if( picked_up_stuff.empty() ) {
             dropoff_coords.clear();
             std::vector<std::pair<int, tripoint_abs_ms>> dest_candidates;
+            std::vector<tripoint_abs_ms> cross_z_dests;
             dest_candidates.reserve( dest_set.size() );
             for( const tripoint_abs_ms &possible_dest : dest_set ) {
                 const tripoint_bub_ms dest_bub = here.get_bub( possible_dest );
                 if( !here.inbounds( dest_bub ) || here.is_open_air( dest_bub ) ) {
                     continue;
                 }
-                dest_candidates.emplace_back( square_dist( abspos, possible_dest ), possible_dest );
+                const int d = zone_sorting::flood_distance( you, dest_bub );
+                if( d == INT_MAX ) {
+                    if( possible_dest.z() != you.pos_abs().z() ) {
+                        cross_z_dests.emplace_back( possible_dest );
+                    }
+                    continue;
+                }
+                dest_candidates.emplace_back( d, possible_dest );
             }
             std::sort( dest_candidates.begin(), dest_candidates.end(),
             []( const std::pair<int, tripoint_abs_ms> &a, const std::pair<int, tripoint_abs_ms> &b ) {
                 return a.first < b.first;
             } );
-            for( const auto &[cheb, possible_dest] : dest_candidates ) {
-                if( cheb <= 1 ) {
-                    // Adjacent - always reachable, skip A* probe
-                    dropoff_coords.emplace_back( possible_dest );
-                    continue;
-                }
-                const tripoint_bub_ms dest_bub = here.get_bub( possible_dest );
-                const int dist = zone_sorting::route_length( you, dest_bub );
-                if( dist == INT_MAX ) {
-                    continue;
-                }
+            for( const auto &[dist, possible_dest] : dest_candidates ) {
                 dropoff_coords.emplace_back( possible_dest );
+            }
+            for( const tripoint_abs_ms &p : cross_z_dests ) {
+                dropoff_coords.emplace_back( p );
             }
             if( dropoff_coords.empty() ) {
                 add_msg_debug( debugmode::DF_ACTIVITY,
@@ -13389,30 +13365,31 @@ void zone_sort_activity_actor::stage_do( player_activity &act, Character &you )
 
         if( dropoff_coords.empty() ) {
             // Defensive fallback - 4a normally handles this. Probe fresh.
-            // Sort by Chebyshev so nearby destinations are probed first.
             std::vector<std::pair<int, tripoint_abs_ms>> fallback_dests;
+            std::vector<tripoint_abs_ms> fallback_cross_z;
             for( const tripoint_abs_ms &possible_dest : dest_set ) {
                 const tripoint_bub_ms dest_bub = here.get_bub( possible_dest );
                 if( !here.inbounds( dest_bub ) || here.is_open_air( dest_bub ) ) {
                     continue;
                 }
-                fallback_dests.emplace_back( square_dist( abspos, possible_dest ), possible_dest );
+                const int d = zone_sorting::flood_distance( you, dest_bub );
+                if( d == INT_MAX ) {
+                    if( possible_dest.z() != you.pos_abs().z() ) {
+                        fallback_cross_z.emplace_back( possible_dest );
+                    }
+                    continue;
+                }
+                fallback_dests.emplace_back( d, possible_dest );
             }
             std::sort( fallback_dests.begin(), fallback_dests.end(),
             []( const std::pair<int, tripoint_abs_ms> &a, const std::pair<int, tripoint_abs_ms> &b ) {
                 return a.first < b.first;
             } );
-            for( const auto &[cheb, possible_dest] : fallback_dests ) {
-                if( cheb <= 1 ) {
-                    dropoff_coords.emplace_back( possible_dest );
-                    continue;
-                }
-                const tripoint_bub_ms dest_bub = here.get_bub( possible_dest );
-                const int dist = zone_sorting::route_length( you, dest_bub );
-                if( dist == INT_MAX ) {
-                    continue;
-                }
+            for( const auto &[dist, possible_dest] : fallback_dests ) {
                 dropoff_coords.emplace_back( possible_dest );
+            }
+            for( const tripoint_abs_ms &p : fallback_cross_z ) {
+                dropoff_coords.emplace_back( p );
             }
         }
 
@@ -13482,121 +13459,130 @@ void zone_sort_activity_actor::stage_do( player_activity &act, Character &you )
         if( picked_up_this_pass ) {
             int dest_dist = INT_MAX;
             for( const tripoint_abs_ms &dest : dropoff_coords ) {
-                dest_dist = std::min( dest_dist, square_dist( abspos, dest ) );
+                dest_dist = std::min( dest_dist,
+                                      zone_sorting::flood_distance( you, here.get_bub( dest ) ) );
             }
 
-            // Pre-fetch cart cargo for per-item volume check
-            std::optional<vpart_reference> batch_cart_vp;
-            if( you.is_avatar() && you.as_avatar()->get_grab_type() == object_type::VEHICLE ) {
-                const tripoint_bub_ms cart_pos = you.pos_bub() + you.as_avatar()->grab_point;
-                batch_cart_vp = here.veh_at( cart_pos ).cargo();
-            }
+            // All destinations are cross-z or unreachable; a detour through
+            // stairs is never a worthwhile batch pickup, so skip batching.
+            if( dest_dist < INT_MAX ) {
 
-            // Build distance-sorted candidates, mirroring THINK's filters
-            std::vector<std::pair<int, tripoint_abs_ms>> batch_candidates;
-            for( const tripoint_abs_ms &candidate : coord_set ) {
-                if( candidate == src ) {
-                    continue;
+                // Pre-fetch cart cargo for per-item volume check
+                std::optional<vpart_reference> batch_cart_vp;
+                if( you.is_avatar() && you.as_avatar()->get_grab_type() == object_type::VEHICLE ) {
+                    const tripoint_bub_ms cart_pos = you.pos_bub() + you.as_avatar()->grab_point;
+                    batch_cart_vp = here.veh_at( cart_pos ).cargo();
                 }
-                if( unreachable_sources.count( candidate ) ) {
-                    continue;
-                }
-                const tripoint_bub_ms cand_bub = here.get_bub( candidate );
-                if( !here.inbounds( cand_bub ) ) {
-                    continue;
-                }
-                if( zone_sorting::ignore_zone_position( you, candidate,
-                                                        zone_sorting::ignore_contents( you, candidate ) ) ) {
-                    continue;
-                }
-                const int cand_dist = square_dist( abspos, candidate );
-                if( cand_dist >= dest_dist ) {
-                    continue;
-                }
-                batch_candidates.emplace_back( cand_dist, candidate );
-            }
-            std::sort( batch_candidates.begin(), batch_candidates.end(),
-                       []( const std::pair<int, tripoint_abs_ms> &a,
-            const std::pair<int, tripoint_abs_ms> &b ) {
-                return a.first < b.first;
-            } );
 
-            bool should_batch = false;
-            tripoint_abs_ms batch_target;
-            for( const auto &[cand_dist, candidate] : batch_candidates ) {
-                const tripoint_bub_ms cand_bub = here.get_bub( candidate );
-                const bool cand_has_terrain_unsorted =
-                    mgr.has_terrain( zone_type_LOOT_UNSORTED, candidate, fac_id );
-                const bool cand_has_vehicle_unsorted =
-                    mgr.has_vehicle( zone_type_LOOT_UNSORTED, candidate, fac_id );
+                // Build distance-sorted candidates, mirroring THINK's filters
+                std::vector<std::pair<int, tripoint_abs_ms>> batch_candidates;
+                for( const tripoint_abs_ms &candidate : coord_set ) {
+                    if( candidate == src ) {
+                        continue;
+                    }
+                    if( unreachable_sources.count( candidate ) ) {
+                        continue;
+                    }
+                    const tripoint_bub_ms cand_bub = here.get_bub( candidate );
+                    if( !here.inbounds( cand_bub ) ) {
+                        continue;
+                    }
+                    if( zone_sorting::ignore_zone_position( you, candidate,
+                                                            zone_sorting::ignore_contents( you, candidate ) ) ) {
+                        continue;
+                    }
+                    if( candidate.z() != you.pos_abs().z() ) {
+                        continue;
+                    }
+                    const int cand_dist = zone_sorting::flood_distance( you, cand_bub );
+                    if( cand_dist >= dest_dist ) {
+                        continue;
+                    }
+                    batch_candidates.emplace_back( cand_dist, candidate );
+                }
+                std::sort( batch_candidates.begin(), batch_candidates.end(),
+                           []( const std::pair<int, tripoint_abs_ms> &a,
+                const std::pair<int, tripoint_abs_ms> &b ) {
+                    return a.first < b.first;
+                } );
 
-                for( const auto &[it, from_veh] : zone_sorting::populate_items( cand_bub ) ) {
-                    // Source binding filter (mirrors DO item loop)
-                    if( from_veh && !cand_has_vehicle_unsorted ) {
-                        continue;
-                    }
-                    if( !from_veh && !cand_has_terrain_unsorted ) {
-                        continue;
-                    }
-                    if( zone_sorting::sort_skip_item( you, it, other_activity_items,
-                                                      mgr.has( zone_type_LOOT_IGNORE_FAVORITES, candidate, fac_id ),
-                                                      candidate ) ) {
-                        continue;
-                    }
-                    // Destination compatibility: exact zone-type match
-                    const zone_type_id cand_zt = mgr.get_near_zone_type_for_item(
-                                                     *it, abspos, MAX_VIEW_DISTANCE, fac_id );
-                    if( cand_zt == zone_type_id::NULL_ID() ) {
-                        continue;
-                    }
-                    bool shares_dest = false;
-                    for( const tripoint_abs_ms &possible_dest : dropoff_coords ) {
-                        if( mgr.get_near_zone_type_for_item( *it, possible_dest, 0,
-                                                             fac_id ) == cand_zt ) {
-                            shares_dest = true;
+                bool should_batch = false;
+                tripoint_abs_ms batch_target;
+                for( const auto &[cand_dist, candidate] : batch_candidates ) {
+                    const tripoint_bub_ms cand_bub = here.get_bub( candidate );
+                    const bool cand_has_terrain_unsorted =
+                        mgr.has_terrain( zone_type_LOOT_UNSORTED, candidate, fac_id );
+                    const bool cand_has_vehicle_unsorted =
+                        mgr.has_vehicle( zone_type_LOOT_UNSORTED, candidate, fac_id );
+
+                    for( const auto &[it, from_veh] : zone_sorting::populate_items( cand_bub ) ) {
+                        // Source binding filter (mirrors DO item loop)
+                        if( from_veh && !cand_has_vehicle_unsorted ) {
+                            continue;
+                        }
+                        if( !from_veh && !cand_has_terrain_unsorted ) {
+                            continue;
+                        }
+                        if( zone_sorting::sort_skip_item( you, it, other_activity_items,
+                                                          mgr.has( zone_type_LOOT_IGNORE_FAVORITES, candidate, fac_id ),
+                                                          candidate ) ) {
+                            continue;
+                        }
+                        // Destination compatibility: exact zone-type match
+                        const zone_type_id cand_zt = mgr.get_near_zone_type_for_item(
+                                                         *it, abspos, MAX_VIEW_DISTANCE, fac_id );
+                        if( cand_zt == zone_type_id::NULL_ID() ) {
+                            continue;
+                        }
+                        bool shares_dest = false;
+                        for( const tripoint_abs_ms &possible_dest : dropoff_coords ) {
+                            if( mgr.get_near_zone_type_for_item( *it, possible_dest, 0,
+                                                                 fac_id ) == cand_zt ) {
+                                shares_dest = true;
+                                break;
+                            }
+                        }
+                        if( !shares_dest ) {
+                            continue;
+                        }
+                        // Per-item capacity check
+                        bool fits = false;
+                        if( batch_cart_vp &&
+                            batch_cart_vp->items().free_volume() >= it->volume() ) {
+                            fits = true;
+                        }
+                        if( !fits && you.can_stash( *it ) ) {
+                            fits = true;
+                        }
+                        if( fits ) {
+                            should_batch = true;
+                            batch_target = candidate;
                             break;
                         }
                     }
-                    if( !shares_dest ) {
-                        continue;
-                    }
-                    // Per-item capacity check
-                    bool fits = false;
-                    if( batch_cart_vp &&
-                        batch_cart_vp->items().free_volume() >= it->volume() ) {
-                        fits = true;
-                    }
-                    if( !fits && you.can_stash( *it ) ) {
-                        fits = true;
-                    }
-                    if( fits ) {
-                        should_batch = true;
-                        batch_target = candidate;
+                    if( should_batch ) {
                         break;
                     }
                 }
-                if( should_batch ) {
-                    break;
-                }
-            }
 
-            if( should_batch ) {
-                add_msg_debug( debugmode::DF_ACTIVITY,
-                               "zone_sort DO: batching - detour to (%d,%d,%d) before delivery",
-                               batch_target.x(), batch_target.y(), batch_target.z() );
-                placement = batch_target;
-                num_processed = 0;
-                if( square_dist( abspos, batch_target ) <= 1 ) {
-                    // Already adjacent, re-enter DO to process batch target
-                    return;
+                if( should_batch ) {
+                    add_msg_debug( debugmode::DF_ACTIVITY,
+                                   "zone_sort DO: batching - detour to (%d,%d,%d) before delivery",
+                                   batch_target.x(), batch_target.y(), batch_target.z() );
+                    placement = batch_target;
+                    num_processed = 0;
+                    if( square_dist( abspos, batch_target ) <= 1 ) {
+                        // Already adjacent, re-enter DO to process batch target
+                        return;
+                    }
+                    if( zone_sorting::route_to_destination( you, act,
+                                                            here.get_bub( batch_target ), stage ) ) {
+                        return;
+                    }
+                    // Can't reach batch target, mark unreachable and fall through to delivery
+                    unreachable_sources.emplace( batch_target );
                 }
-                if( zone_sorting::route_to_destination( you, act,
-                                                        here.get_bub( batch_target ), stage ) ) {
-                    return;
-                }
-                // Can't reach batch target, mark unreachable and fall through to delivery
-                unreachable_sources.emplace( batch_target );
-            }
+            } // dest_dist < INT_MAX
             // Reset after evaluation. Prevents infinite loops when a batch
             // target has no pickable items (zero moves consumed per cycle).
             picked_up_this_pass = false;
@@ -13671,13 +13657,19 @@ void zone_sort_activity_actor::stage_do( player_activity &act, Character &you )
             return;
         }
         if( !zone_sorting::route_to_destination( you, act, here.get_bub( destination ), stage ) ) {
-            // Defensive: route_length passed (destination was in dropoff_coords)
-            // but route_to_destination failed. Both use the same A* in a single
-            // turn, so this shouldn't happen normally.
+            // Flood said reachable but route_to_destination failed (divergent
+            // door handling or stale flood). Remove failing dest and retry on
+            // next do_turn; if no destinations left, return items to source.
             add_msg_debug( debugmode::DF_ACTIVITY,
-                           "zone_sort DO: route to dest FAILED, returning items, back to THINK" );
-            return_items_to_source( you, src_bub );
-            stage = THINK;
+                           "zone_sort DO: route to dest (%d,%d,%d) FAILED, removing dest",
+                           destination.x(), destination.y(), destination.z() );
+            dropoff_coords.erase(
+                std::remove( dropoff_coords.begin(), dropoff_coords.end(), destination ),
+                dropoff_coords.end() );
+            if( dropoff_coords.empty() ) {
+                return_items_to_source( you, src_bub );
+                stage = THINK;
+            }
         }
 
     } else if( !you.has_destination() ) {

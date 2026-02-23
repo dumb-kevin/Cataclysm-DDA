@@ -896,6 +896,357 @@ struct zone_route_cache {
 zone_route_cache g_route_cache;
 } // namespace
 
+// --- Dijkstra flood distance cache ---
+// Single-source Dijkstra from the player, computing real route distances to
+// all reachable tiles on the same z-level. One computation per
+// player-position/grab-state change, O(1) lookups afterward.
+namespace
+{
+void compute_flood_normal( const Character &who, std::vector<int> &flood_dist );
+void compute_flood_grab( const Character &who, std::vector<int> &flood_dist );
+
+struct zone_flood_cache {
+    tripoint_bub_ms start;
+    object_type grab_type = object_type::NONE;
+    tripoint_rel_ms grab_point;
+    bool initialized = false;
+    // Per-position minimum weighted cost. Indexed by pos.x() * MAPSIZE_Y + pos.y().
+    // INT_MAX = unreachable.
+    std::vector<int> dist;
+
+    bool is_valid( const Character &who ) const {
+        if( !initialized ) {
+            return false;
+        }
+        if( start != who.pos_bub() ) {
+            return false;
+        }
+        object_type gt = object_type::NONE;
+        tripoint_rel_ms gp;
+        if( who.is_avatar() ) {
+            gt = who.as_avatar()->get_grab_type();
+            gp = who.as_avatar()->grab_point;
+        }
+        return grab_type == gt && grab_point == gp;
+    }
+
+    void ensure_valid( const Character &who ) {
+        if( is_valid( who ) ) {
+            return;
+        }
+        start = who.pos_bub();
+        if( who.is_avatar() ) {
+            grab_type = who.as_avatar()->get_grab_type();
+            grab_point = who.as_avatar()->grab_point;
+        } else {
+            grab_type = object_type::NONE;
+            grab_point = tripoint_rel_ms::zero;
+        }
+        initialized = true;
+
+        if( grab_type == object_type::VEHICLE ) {
+            const map &here = get_map();
+            const tripoint_bub_ms veh_pos = start + grab_point;
+            const optional_vpart_position ovp = here.veh_at( veh_pos );
+            if( ovp && ovp->vehicle().get_points().size() == 1 ) {
+                compute_flood_grab( who, dist );
+                return;
+            }
+            // Multi-tile vehicle or no vehicle at grab point: fall back to
+            // normal flood (grab-aware A* doesn't support multi-tile).
+        }
+        compute_flood_normal( who, dist );
+    }
+
+    // Minimum distance to any tile in the 3x3 neighborhood of dest.
+    // Matches pathfinding_target::adjacent semantics.
+    // Returns INT_MAX if all neighbors are unreachable.
+    int distance_to_adjacent( const tripoint_bub_ms &dest ) const {
+        int best = INT_MAX;
+        for( int dx = -1; dx <= 1; dx++ ) {
+            for( int dy = -1; dy <= 1; dy++ ) {
+                const int nx = dest.x() + dx;
+                const int ny = dest.y() + dy;
+                if( nx < 0 || nx >= MAPSIZE_X || ny < 0 || ny >= MAPSIZE_Y ) {
+                    continue;
+                }
+                const int idx = nx * MAPSIZE_Y + ny;
+                if( dist[idx] < best ) {
+                    best = dist[idx];
+                }
+            }
+        }
+        return best;
+    }
+};
+
+zone_flood_cache g_flood_cache;
+
+void compute_flood_normal( const Character &who, std::vector<int> &flood_dist )
+{
+    const map &here = get_map();
+    const int max_len = who.get_pathfinding_settings().max_length;
+    const int total = MAPSIZE_X * MAPSIZE_Y;
+    const int z = who.pos_bub().z();
+
+    flood_dist.assign( total, INT_MAX );
+
+    static std::vector<bool> closed;
+    closed.assign( total, false );
+
+    using pq_entry = std::pair<int, int>;
+    std::priority_queue<pq_entry, std::vector<pq_entry>, std::greater<pq_entry>> pq;
+
+    const int start_idx = who.pos_bub().x() * MAPSIZE_Y + who.pos_bub().y();
+    flood_dist[start_idx] = 0;
+    pq.emplace( 0, start_idx );
+
+    while( !pq.empty() ) {
+        const auto [cur_g, cur_idx] = pq.top();
+        pq.pop();
+
+        if( closed[cur_idx] ) {
+            continue;
+        }
+        closed[cur_idx] = true;
+
+        const int cx = cur_idx / MAPSIZE_Y;
+        const int cy = cur_idx % MAPSIZE_Y;
+
+        for( int dx = -1; dx <= 1; dx++ ) {
+            for( int dy = -1; dy <= 1; dy++ ) {
+                if( dx == 0 && dy == 0 ) {
+                    continue;
+                }
+
+                const int nx = cx + dx;
+                const int ny = cy + dy;
+                if( nx < 0 || nx >= MAPSIZE_X || ny < 0 || ny >= MAPSIZE_Y ) {
+                    continue;
+                }
+
+                const int nidx = nx * MAPSIZE_Y + ny;
+                if( closed[nidx] ) {
+                    continue;
+                }
+
+                const tripoint_bub_ms next( nx, ny, z );
+                int tile_cost = here.move_cost( next );
+
+                if( tile_cost == 0 ) {
+                    // Vehicle door check (matching main pathfinder priority)
+                    const optional_vpart_position ovp = here.veh_at( next );
+                    if( ovp ) {
+                        const auto vpobst = ovp->obstacle_at_part();
+                        if( vpobst ) {
+                            vehicle &v = vpobst->vehicle();
+                            const int pi = vpobst->part_index();
+                            // Check approach side: are we coming from outside the vehicle?
+                            const tripoint_bub_ms cur_pos( cx, cy, z );
+                            const optional_vpart_position cur_ovp = here.veh_at( cur_pos );
+                            const bool is_outside = !cur_ovp || &cur_ovp->vehicle() != &v;
+                            if( v.next_part_to_open( pi, is_outside ) != -1 ) {
+                                tile_cost = 10;
+                            } else if( v.next_part_to_unlock( pi, is_outside ) != -1 ) {
+                                tile_cost = 12;
+                            }
+                        }
+                    }
+                    if( tile_cost == 0 ) {
+                        // Terrain/furniture door
+                        const bool is_door =
+                            ( here.ter( next ).obj().open &&
+                              here.ter( next ).obj().has_flag( ter_furn_flag::TFLAG_DOOR ) ) ||
+                            ( here.furn( next ).obj().open &&
+                              here.furn( next ).obj().has_flag( ter_furn_flag::TFLAG_DOOR ) );
+                        if( is_door ) {
+                            tile_cost = 4;
+                        }
+                    }
+                    if( tile_cost == 0 ) {
+                        continue; // impassable
+                    }
+                }
+
+                const bool diagonal = dx != 0 && dy != 0;
+                const int new_g = cur_g + tile_cost + ( diagonal ? 1 : 0 );
+
+                if( new_g > max_len ) {
+                    continue;
+                }
+
+                if( new_g < flood_dist[nidx] ) {
+                    flood_dist[nidx] = new_g;
+                    pq.emplace( new_g, nidx );
+                }
+            }
+        }
+    }
+}
+
+void compute_flood_grab( const Character &who, std::vector<int> &flood_dist )
+{
+    const map &here = get_map();
+    const int max_len = who.get_pathfinding_settings().max_length;
+    const int z = who.pos_bub().z();
+    const int pos_total = MAPSIZE_X * MAPSIZE_Y;
+    const int state_total = pos_total * GRAB_DIRS;
+
+    flood_dist.assign( pos_total, INT_MAX );
+
+    static std::vector<int> gscore;
+    gscore.assign( state_total, INT_MAX );
+    static std::vector<bool> state_closed;
+    state_closed.assign( state_total, false );
+
+    const avatar *av = who.as_avatar();
+    const tripoint_bub_ms veh_pos = who.pos_bub() + av->grab_point;
+    vehicle &grabbed_veh = here.veh_at( veh_pos )->vehicle();
+
+    const int start_grab_idx = grab_to_idx( av->grab_point );
+    const int start_state = grab_state_index( who.pos_bub().xy(), start_grab_idx );
+    gscore[start_state] = 0;
+
+    using pq_entry = std::pair<int, int>;
+    std::priority_queue<pq_entry, std::vector<pq_entry>, std::greater<pq_entry>> pq;
+    pq.emplace( 0, start_state );
+
+    constexpr std::array<int, 8> x_off{ { -1,  1,  0,  0,  1, -1, -1, 1 } };
+    constexpr std::array<int, 8> y_off{ {  0,  0, -1,  1, -1,  1, -1, 1 } };
+
+    while( !pq.empty() ) {
+        const auto [cur_g, cur_state] = pq.top();
+        pq.pop();
+
+        if( state_closed[cur_state] ) {
+            continue;
+        }
+        state_closed[cur_state] = true;
+
+        if( cur_g > max_len ) {
+            // Dijkstra settles in cost order; all remaining states exceed budget.
+            continue;
+        }
+
+        const point_bub_ms cur_pos = state_to_pos( cur_state );
+        const int cur_grab_idx = cur_state % GRAB_DIRS;
+        const tripoint_rel_ms cur_grab = idx_to_grab( cur_grab_idx );
+
+        // Collapse to per-position minimum
+        const int pos_idx = cur_pos.x() * MAPSIZE_Y + cur_pos.y();
+        flood_dist[pos_idx] = std::min( flood_dist[pos_idx], cur_g );
+
+        for( size_t i = 0; i < 8; i++ ) {
+            const point_bub_ms next_pos( cur_pos.x() + x_off[i], cur_pos.y() + y_off[i] );
+
+            if( next_pos.x() < 0 || next_pos.x() >= MAPSIZE_X ||
+                next_pos.y() < 0 || next_pos.y() >= MAPSIZE_Y ) {
+                continue;
+            }
+
+            const tripoint_bub_ms next3d( next_pos, z );
+
+            // Player passability (ignore grabbed vehicle - it vacates the tile on push)
+            int tile_cost = here.move_cost( next3d, &grabbed_veh );
+            if( tile_cost == 0 ) {
+                const bool is_door =
+                    ( here.ter( next3d ).obj().open &&
+                      here.ter( next3d ).obj().has_flag( ter_furn_flag::TFLAG_DOOR ) ) ||
+                    ( here.furn( next3d ).obj().open &&
+                      here.furn( next3d ).obj().has_flag( ter_furn_flag::TFLAG_DOOR ) );
+                if( is_door ) {
+                    tile_cost = 4;
+                } else {
+                    continue;
+                }
+            }
+
+            const tripoint_rel_ms dp( x_off[i], y_off[i], 0 );
+            tripoint_rel_ms dp_veh = -cur_grab;
+            tripoint_rel_ms next_grab = cur_grab;
+            bool vehicle_moves = true;
+            bool is_zigzag = false;
+            bool is_push = false;
+
+            if( dp == cur_grab ) {
+                // PUSH: vehicle moves in same direction as player
+                dp_veh = dp;
+                is_push = true;
+            } else if( std::abs( dp.x() + dp_veh.x() ) != 2 &&
+                       std::abs( dp.y() + dp_veh.y() ) != 2 ) {
+                // SIDEWAYS: vehicle stays put, grab rotates
+                next_grab = -( dp + dp_veh );
+                vehicle_moves = false;
+            } else if( ( dp.x() == cur_grab.x() || dp.y() == cur_grab.y() ) &&
+                       cur_grab.x() != 0 && cur_grab.y() != 0 ) {
+                // ZIGZAG: player diagonal to vehicle, moves partially away
+                dp_veh.x() = dp.x() == -dp_veh.x() ? 0 : dp_veh.x();
+                dp_veh.y() = dp.y() == -dp_veh.y() ? 0 : dp_veh.y();
+                next_grab = -dp_veh;
+                is_zigzag = true;
+            } else {
+                // PULL: vehicle moves to player's old position
+                next_grab = -dp;
+            }
+
+            int veh_terrain_cost = 0;
+
+            if( vehicle_moves ) {
+                const tripoint_bub_ms veh_new( cur_pos + cur_grab.xy() + dp_veh.xy(), z );
+                const optional_vpart_position ovp_new = here.veh_at( veh_new );
+                const bool other_veh = ovp_new && &ovp_new->vehicle() != &grabbed_veh;
+                const bool allow_doors = !( is_push || is_zigzag );
+                const bool veh_blocked = other_veh ||
+                                         tile_blocks_vehicle( here, veh_new, allow_doors );
+                if( veh_blocked ) {
+                    // Zigzag recovery: fall back to pull when vehicle move collides
+                    if( is_zigzag ) {
+                        dp_veh = -cur_grab;
+                        next_grab = -dp;
+                        const tripoint_bub_ms veh_recover(
+                            cur_pos + cur_grab.xy() + dp_veh.xy(), z );
+                        const optional_vpart_position ovp_rec = here.veh_at( veh_recover );
+                        const bool rec_other_veh = ovp_rec &&
+                                                   &ovp_rec->vehicle() != &grabbed_veh;
+                        if( rec_other_veh ||
+                            tile_blocks_vehicle( here, veh_recover ) ) {
+                            continue;
+                        }
+                        veh_terrain_cost = veh_drag_cost( here, veh_recover );
+                    } else {
+                        continue;
+                    }
+                } else {
+                    veh_terrain_cost = veh_drag_cost( here, veh_new );
+                }
+            }
+
+            const int next_grab_idx = grab_to_idx( next_grab );
+            const int next_state = grab_state_index( next_pos, next_grab_idx );
+
+            if( state_closed[next_state] ) {
+                continue;
+            }
+
+            const bool diagonal = cur_pos.x() != next_pos.x() &&
+                                  cur_pos.y() != next_pos.y();
+            const int newg = cur_g + tile_cost + veh_terrain_cost +
+                             ( diagonal ? 1 : 0 );
+
+            if( newg > max_len ) {
+                continue;
+            }
+
+            if( newg < gscore[next_state] ) {
+                gscore[next_state] = newg;
+                pq.emplace( newg, next_state );
+            }
+        }
+    }
+}
+
+} // anonymous namespace
+
 // Check if a straight push or pull path works, skipping the full A*.
 // Only applies when grab direction is aligned with travel direction
 // (push) or opposite (pull), and every tile on the line is passable
@@ -1241,47 +1592,32 @@ bool route_to_destination( Character &you, player_activity &act,
 {
     const map &here = get_map();
     std::vector<tripoint_bub_ms> route;
-
-    // Check if route_length() already computed a path for this destination.
-    g_route_cache.ensure_valid( you );
     bool used_grab_routing = false;
-    bool from_cache = false;
-    if( const std::vector<tripoint_bub_ms> *cached = g_route_cache.find( dest ) ) {
-        if( !cached->empty() ) {
-            route = *cached;
-            from_cache = true;
-            used_grab_routing = ( you.is_avatar() &&
-                                  you.as_avatar()->get_grab_type() == object_type::VEHICLE );
-        }
-    }
 
-    if( route.empty() && !from_cache ) {
-        // Use grab-aware A* when dragging a single-tile vehicle - searches over
-        // (position, grab_direction) state so both player and cart can move.
-        if( you.is_avatar() && you.as_avatar()->get_grab_type() == object_type::VEHICLE ) {
-            const tripoint_bub_ms veh_pos = you.pos_bub() + you.as_avatar()->grab_point;
-            const optional_vpart_position ovp = here.veh_at( veh_pos );
-            if( ovp && ovp->vehicle().get_points().size() == 1 ) {
-                // Single-tile vehicle: use grab-aware A*. If no path found,
-                // treat as unreachable (don't fall back to player-only routing
-                // which would cause cart collisions).
-                used_grab_routing = true;
-                route = route_with_grab( here, you, pathfinding_target::adjacent( dest ) );
-            } else {
-                // Multi-tile vehicle or no vehicle at grab point: use normal
-                // pathfinding (grab-aware A* doesn't support multi-tile).
-                route = here.route( you, pathfinding_target::adjacent( dest ) );
-            }
+    // Use grab-aware A* when dragging a single-tile vehicle - searches over
+    // (position, grab_direction) state so both player and cart can move.
+    if( you.is_avatar() && you.as_avatar()->get_grab_type() == object_type::VEHICLE ) {
+        const tripoint_bub_ms veh_pos = you.pos_bub() + you.as_avatar()->grab_point;
+        const optional_vpart_position ovp = here.veh_at( veh_pos );
+        if( ovp && ovp->vehicle().get_points().size() == 1 ) {
+            // Single-tile vehicle: use grab-aware A*. If no path found,
+            // treat as unreachable (don't fall back to player-only routing
+            // which would cause cart collisions).
+            used_grab_routing = true;
+            route = route_with_grab( here, you, pathfinding_target::adjacent( dest ) );
         } else {
+            // Multi-tile vehicle or no vehicle at grab point: use normal
+            // pathfinding (grab-aware A* doesn't support multi-tile).
             route = here.route( you, pathfinding_target::adjacent( dest ) );
         }
+    } else {
+        route = here.route( you, pathfinding_target::adjacent( dest ) );
     }
 
     add_msg_debug( debugmode::DF_ACTIVITY,
                    "route_to_dest: dest=(%d,%d) %s route_len=%zu %s",
                    dest.x(), dest.y(),
-                   from_cache ? "cached" :
-                   ( used_grab_routing ? "grab_astar" : "normal_astar" ),
+                   used_grab_routing ? "grab_astar" : "normal_astar",
                    route.size(),
                    route.empty() ? "FAILED" : "OK" );
 
@@ -1769,6 +2105,24 @@ int route_length( const Character &you, const tripoint_bub_ms &dest )
 
     g_route_cache.store( dest, route );
     return route.empty() ? INT_MAX : static_cast<int>( route.size() );
+}
+
+int flood_distance( const Character &who, const tripoint_bub_ms &dest )
+{
+    const map &here = get_map();
+    if( !here.inbounds( dest ) ) {
+        return INT_MAX;
+    }
+    if( dest.z() != who.pos_bub().z() ) {
+        return INT_MAX;
+    }
+    g_flood_cache.ensure_valid( who );
+    return g_flood_cache.distance_to_adjacent( dest );
+}
+
+void invalidate_flood_cache()
+{
+    g_flood_cache.initialized = false;
 }
 } //namespace zone_sorting
 

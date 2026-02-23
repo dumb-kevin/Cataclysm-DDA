@@ -1,3 +1,4 @@
+#include <climits>
 #include <functional>
 #include <initializer_list>
 #include <optional>
@@ -6,6 +7,7 @@
 #include <vector>
 
 #include "activity_actor_definitions.h"
+#include "activity_item_handling.h"
 #include "avatar.h"
 #include "calendar.h"
 #include "cata_catch.h"
@@ -41,6 +43,7 @@ static const itype_id
 itype_test_watertight_open_sealed_container_250ml( "test_watertight_open_sealed_container_250ml" );
 static const itype_id itype_test_wine( "test_wine" );
 
+static const ter_str_id ter_t_door_c( "t_door_c" );
 static const ter_str_id ter_t_floor( "t_floor" );
 static const ter_str_id ter_t_wall( "t_wall" );
 
@@ -1855,4 +1858,221 @@ TEST_CASE( "zone_sorting_multi_dest_processes_all_items",
     // Both items should be gone from source - sorted to their destinations
     CHECK( count_items_or_charges( src_pos, itype_test_apple, std::nullopt ) == 0 );
     CHECK( count_items_or_charges( src_pos, itype_test_bitter_almond, std::nullopt ) == 0 );
+}
+
+TEST_CASE( "zone_sorting_flood_distance", "[zones][sorting][flood]" )
+{
+    avatar &dummy = get_avatar();
+    map &here = get_map();
+
+    clear_avatar();
+    clear_map_without_vision();
+
+    const tripoint_bub_ms center( 60, 60, 0 );
+    dummy.setpos( here, center );
+    dummy.clear_destination();
+
+    SECTION( "open field: ordering preserved" ) {
+        // Set floor tiles around the player
+        for( int dx = -5; dx <= 5; dx++ ) {
+            for( int dy = -5; dy <= 5; dy++ ) {
+                here.ter_set( center + tripoint( dx, dy, 0 ), ter_t_floor );
+            }
+        }
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        // Closer tile should have a lower flood distance than a farther tile
+        const tripoint_bub_ms near_tile = center + tripoint( 2, 0, 0 );
+        const tripoint_bub_ms far_tile = center + tripoint( 5, 0, 0 );
+        const int d_near = zone_sorting::flood_distance( dummy, near_tile );
+        const int d_far = zone_sorting::flood_distance( dummy, far_tile );
+        CHECK( d_near < d_far );
+        CHECK( d_near > 0 );
+        CHECK( d_far < INT_MAX );
+    }
+
+    SECTION( "wall makes path longer" ) {
+        // Set floor tiles
+        for( int dx = -5; dx <= 5; dx++ ) {
+            for( int dy = -5; dy <= 5; dy++ ) {
+                here.ter_set( center + tripoint( dx, dy, 0 ), ter_t_floor );
+            }
+        }
+        // Build an L-shaped wall between player and target
+        // Wall runs along x=2 from y=-3 to y=3
+        for( int dy = -3; dy <= 3; dy++ ) {
+            here.ter_set( center + tripoint( 2, dy, 0 ), ter_t_wall );
+        }
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        // Tile at (3,0) is behind the wall - must go around
+        const tripoint_bub_ms behind_wall = center + tripoint( 3, 0, 0 );
+        // Tile at (0,3) is same Chebyshev distance but in the open
+        const tripoint_bub_ms in_open = center + tripoint( 0, 3, 0 );
+
+        const int d_wall = zone_sorting::flood_distance( dummy, behind_wall );
+        const int d_open = zone_sorting::flood_distance( dummy, in_open );
+        CHECK( d_wall > d_open );
+        CHECK( d_wall < INT_MAX );
+    }
+
+    SECTION( "enclosed tile is unreachable" ) {
+        for( int dx = -3; dx <= 3; dx++ ) {
+            for( int dy = -3; dy <= 3; dy++ ) {
+                here.ter_set( center + tripoint( dx, dy, 0 ), ter_t_floor );
+            }
+        }
+        // Enclose tile at (3,0) with walls on all 8 neighbors
+        const tripoint_bub_ms enclosed = center + tripoint( 3, 0, 0 );
+        for( int dx = -1; dx <= 1; dx++ ) {
+            for( int dy = -1; dy <= 1; dy++ ) {
+                if( dx == 0 && dy == 0 ) {
+                    continue;
+                }
+                here.ter_set( enclosed + tripoint( dx, dy, 0 ), ter_t_wall );
+            }
+        }
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        CHECK( zone_sorting::flood_distance( dummy, enclosed ) == INT_MAX );
+    }
+
+    SECTION( "door adds cost" ) {
+        for( int dx = -3; dx <= 3; dx++ ) {
+            for( int dy = -3; dy <= 3; dy++ ) {
+                here.ter_set( center + tripoint( dx, dy, 0 ), ter_t_floor );
+            }
+        }
+        // Place a closed door between player and target
+        here.ter_set( center + tripoint( 1, 0, 0 ), ter_t_door_c );
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        // Tile behind door at (2,0)
+        const tripoint_bub_ms behind_door = center + tripoint( 2, 0, 0 );
+        // Tile at same distance but no door at (0,2)
+        const tripoint_bub_ms no_door = center + tripoint( 0, 2, 0 );
+
+        const int d_door = zone_sorting::flood_distance( dummy, behind_door );
+        const int d_nodoor = zone_sorting::flood_distance( dummy, no_door );
+        // Door path should cost more due to door opening cost
+        CHECK( d_door > d_nodoor );
+        CHECK( d_door < INT_MAX );
+    }
+
+    SECTION( "adjacent tiles return 0" ) {
+        here.ter_set( center, ter_t_floor );
+        for( int dx = -1; dx <= 1; dx++ ) {
+            for( int dy = -1; dy <= 1; dy++ ) {
+                here.ter_set( center + tripoint( dx, dy, 0 ), ter_t_floor );
+            }
+        }
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        // Player's own tile
+        CHECK( zone_sorting::flood_distance( dummy, center ) == 0 );
+        // Adjacent tiles
+        CHECK( zone_sorting::flood_distance( dummy, center + tripoint::east ) == 0 );
+        CHECK( zone_sorting::flood_distance( dummy, center + tripoint::north ) == 0 );
+    }
+
+    SECTION( "OOB returns INT_MAX" ) {
+        const tripoint_bub_ms oob( -1, -1, 0 );
+        CHECK( zone_sorting::flood_distance( dummy, oob ) == INT_MAX );
+    }
+
+    SECTION( "different z-level returns INT_MAX" ) {
+        const tripoint_bub_ms diff_z( 60, 60, 1 );
+        CHECK( zone_sorting::flood_distance( dummy, diff_z ) == INT_MAX );
+    }
+}
+
+TEST_CASE( "zone_sorting_flood_distance_with_grab", "[zones][sorting][flood][vehicle]" )
+{
+    avatar &dummy = get_avatar();
+    map &here = get_map();
+
+    clear_avatar();
+    clear_map_without_vision();
+    zone_manager::get_manager().clear();
+
+    const tripoint_bub_ms center( 60, 60, 0 );
+    dummy.setpos( here, center );
+    dummy.clear_destination();
+
+    // Set floor for the area
+    for( int dx = -10; dx <= 10; dx++ ) {
+        for( int dy = -10; dy <= 10; dy++ ) {
+            here.ter_set( center + tripoint( dx, dy, 0 ), ter_t_floor );
+        }
+    }
+
+    SECTION( "grab flood finds longer path through narrow gap" ) {
+        // Place single-tile cart east of player
+        const tripoint_bub_ms cart_pos = center + tripoint::east;
+        vehicle *cart = here.add_vehicle( vehicle_prototype_test_shopping_cart,
+                                          cart_pos, 0_degrees, 0, 0 );
+        REQUIRE( cart != nullptr );
+        cart->set_owner( dummy );
+        dummy.grab( object_type::VEHICLE, tripoint_rel_ms::east );
+        REQUIRE( dummy.get_grab_type() == object_type::VEHICLE );
+
+        // Build a wall with a 1-tile gap that the player can walk through
+        // but the cart can't easily navigate (cart needs 2 free tiles to
+        // push through). Wall at x=3, gap at y=0.
+        for( int dy = -4; dy <= 4; dy++ ) {
+            if( dy == 0 ) {
+                continue; // gap
+            }
+            here.ter_set( center + tripoint( 3, dy, 0 ), ter_t_wall );
+        }
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        // With grab, the flood should find the target reachable (going around)
+        const tripoint_bub_ms target = center + tripoint( 5, 0, 0 );
+        const int d = zone_sorting::flood_distance( dummy, target );
+        CHECK( d < INT_MAX );
+        CHECK( d > 0 );
+    }
+
+    SECTION( "multi-tile vehicle falls back to normal flood" ) {
+        // Place multi-tile vehicle east of player
+        const tripoint_bub_ms veh_pos = center + tripoint::east;
+        vehicle *veh = here.add_vehicle( vehicle_prototype_test_turret_rig,
+                                         veh_pos, 0_degrees, 0, 0 );
+        REQUIRE( veh != nullptr );
+        REQUIRE( veh->get_points().size() > 1 );
+        veh->set_owner( dummy );
+        dummy.grab( object_type::VEHICLE, tripoint_rel_ms::east );
+
+        here.invalidate_map_cache( 0 );
+        here.build_map_cache( 0, true );
+        zone_sorting::invalidate_flood_cache();
+
+        // Should fall back to normal flood (same results as no grab for
+        // passable tiles not blocked by the vehicle)
+        const tripoint_bub_ms target = center + tripoint( 0, 5, 0 );
+        const int d_grab = zone_sorting::flood_distance( dummy, target );
+
+        // Compare with no-grab flood
+        dummy.grab( object_type::NONE );
+        zone_sorting::invalidate_flood_cache();
+        const int d_nograb = zone_sorting::flood_distance( dummy, target );
+
+        // Both should find the tile reachable with similar cost
+        CHECK( d_grab < INT_MAX );
+        CHECK( d_nograb < INT_MAX );
+        CHECK( d_grab == d_nograb );
+    }
 }

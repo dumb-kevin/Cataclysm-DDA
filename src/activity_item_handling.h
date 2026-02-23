@@ -121,7 +121,15 @@ void move_item( Character &you, const std::optional<vpart_reference> &vpr_src,
 // Returns A* route length from the player to a tile adjacent to dest.
 // Uses grab-aware routing when the player is dragging a vehicle.
 // Returns INT_MAX if unreachable.
-int route_length( const Character &you, const tripoint_bub_ms &dest );
+int route_length( const Character &who, const tripoint_bub_ms &dest );
+
+// Weighted movement cost from player to adjacent(dest) via cached Dijkstra flood.
+// Returns INT_MAX if unreachable, OOB, or different z-level.
+int flood_distance( const Character &who, const tripoint_bub_ms &dest );
+
+// Force recomputation of the flood cache on the next flood_distance() call.
+// Needed when terrain changes without player movement (e.g. tests).
+void invalidate_flood_cache();
 } //namespace zone_sorting
 
 
