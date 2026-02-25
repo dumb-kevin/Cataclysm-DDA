@@ -1,0 +1,144 @@
+name: Post Flaky Test Retry Result
+
+
+on:
+  workflow_run:
+    workflows: ["General build matrix"]
+    types:
+      - completed
+
+
+jobs:
+  post-retry-result:
+    runs-on: ubuntu-latest
+    if: >-
+      ${{ github.event.workflow_run.event == 'pull_request' }}
+    steps:
+      - name: Download pr id artifact
+        uses: dawidd6/action-download-artifact@09f2f74827fd3a8607589e5ad7f9398816f540fe # v3.1.4
+        with:
+          workflow: ${{ github.event.workflow_run.name }}
+          run_id: ${{ github.event.workflow_run.id }}
+          name: pull_request_id
+          allow_forks: false
+        continue-on-error: true
+        id: pr-id
+      - name: Download retry failure artifacts
+        uses: dawidd6/action-download-artifact@09f2f74827fd3a8607589e5ad7f9398816f540fe # v3.1.4
+        with:
+          workflow: ${{ github.event.workflow_run.name }}
+          run_id: ${{ github.event.workflow_run.id }}
+          name: retry-failures-.*
+          name_is_regexp: true
+          allow_forks: false
+        continue-on-error: true
+        id: retry
+      - name: 'Post or update PR comment'
+        if: steps.pr-id.outcome == 'success'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            // Read PR number
+            const issue_number = Number(fs.readFileSync('./pull_request_id').toString().trim());
+            if (!issue_number) {
+              console.log("No valid PR number found. Exiting.");
+              return;
+            }
+
+            const marker = '### :warning: Flaky Test Retries';
+            const hasRetryArtifacts = '${{ steps.retry.outcome }}' === 'success';
+
+            // Collect all retry markdown fragments
+            let body = '';
+            if (hasRetryArtifacts) {
+              const fragments = [];
+              // Each artifact is downloaded into a directory named after the artifact
+              const entries = fs.readdirSync('.', { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.isDirectory() && entry.name.startsWith('retry-failures-')) {
+                  const mdPath = path.join(entry.name, 'retry_comment.md');
+                  if (fs.existsSync(mdPath)) {
+                    const content = fs.readFileSync(mdPath, 'utf8').trim();
+                    if (content) {
+                      fragments.push(content);
+                    }
+                  }
+                }
+              }
+              if (fragments.length > 0) {
+                body = [
+                  marker,
+                  '',
+                  `Tests tagged with \`[retry]\` failed in [this CI run](${ process.env.RUN_URL }).`,
+                  "🚨 These failures don't block merging if they pass on retry, but **please check if your changes could be responsible.** Persistent failures across retries indicate a real problem.",
+                  '',
+                  '---',
+                  '',
+                  fragments.join('\n'),
+                ].join('\n');
+              }
+            }
+
+            // Fetch existing comments to find previous retry reports
+            console.log("Fetching comments for PR %d", issue_number);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+            });
+            const prevComments = comments
+              .filter(c => c.user.type === 'Bot' && c.user.login === 'github-actions[bot]')
+              .filter(c => c.body.startsWith(marker));
+
+            if (!body) {
+              // No retry failures this run -- minimize any old comments
+              for (const comment of prevComments) {
+                if (!comment.minimized_reason) {
+                  console.log("Minimizing outdated retry comment (id: %d)", comment.id);
+                  await github.graphql(`
+                    mutation($id: ID!) {
+                      minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) {
+                        clientMutationId
+                      }
+                    }
+                  `, { id: comment.node_id });
+                }
+              }
+              console.log("No retry failures to report. Exiting.");
+              return;
+            }
+
+            // Check if the exact same comment already exists
+            if (prevComments.some(c => c.body === body)) {
+              console.log("Identical retry comment already exists. Exiting.");
+              return;
+            }
+
+            // Minimize old retry comments
+            for (const comment of prevComments) {
+              if (!comment.minimized_reason) {
+                console.log("Minimizing outdated retry comment (id: %d)", comment.id);
+                await github.graphql(`
+                  mutation($id: ID!) {
+                    minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) {
+                      clientMutationId
+                    }
+                  }
+                `, { id: comment.node_id });
+              }
+            }
+
+            // Post new comment
+            console.log("Posting retry failure comment on PR %d", issue_number);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              body: body,
+            });

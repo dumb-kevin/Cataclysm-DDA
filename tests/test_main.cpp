@@ -8,9 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <functional>
 #include <memory>
-#include <ostream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -63,6 +63,7 @@ static std::string user_dir;
 static bool dont_save{ false };
 static option_overrides_t option_overrides_for_test_suite;
 static std::string error_fmt = "human-readable";
+static std::string retry_failed_file;
 
 static std::chrono::system_clock::time_point start_time;
 static std::chrono::system_clock::time_point end_time;
@@ -202,6 +203,8 @@ static option_overrides_t extract_option_overrides( const std::string_view optio
 struct CataListener : Catch::TestEventListenerBase {
     using TestEventListenerBase::TestEventListenerBase;
 
+    std::vector<std::string> failed_retry_tests;
+
     void testRunStarting( Catch::TestRunInfo const & ) override {
         if( needs_game ) {
             try {
@@ -224,6 +227,24 @@ struct CataListener : Catch::TestEventListenerBase {
 
     void testRunEnded( Catch::TestRunStats const & ) override {
         end_time = std::chrono::system_clock::now();
+        if( !retry_failed_file.empty() && !failed_retry_tests.empty() ) {
+            std::ofstream f( retry_failed_file );
+            for( const std::string &name : failed_retry_tests ) {
+                f << name << "\n";
+            }
+        }
+    }
+
+    void testCaseEnded( Catch::TestCaseStats const &testCaseStats ) override {
+        if( testCaseStats.totals.assertions.failed > 0 ) {
+            for( const std::string &tag : testCaseStats.testInfo.tags ) {
+                if( tag == "retry" ) {
+                    failed_retry_tests.push_back( testCaseStats.testInfo.name );
+                    break;
+                }
+            }
+        }
+        TestEventListenerBase::testCaseEnded( testCaseStats );
     }
 
     void sectionStarting( Catch::SectionInfo const &sectionInfo ) override {
@@ -354,6 +375,9 @@ int main( int argc, const char *argv[] )
                  | Opt( limit_debug_level, "number" )
                  ["--set-debug-level-mask"]
                  ( "[CataclysmDDA] Set debug level bitmask - see `enum DebugLevel` in src/debug.h for individual bits definition" )
+                 | Opt( retry_failed_file, "filename" )
+                 ["--retry-failed"]
+                 ( "[CataclysmDDA] Write names of failed [retry]-tagged tests to this file." )
                  ;
     session.cli( cli );
 

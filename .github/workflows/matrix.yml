@@ -324,6 +324,26 @@ jobs:
     - name: run tests
       if: ${{ env.SKIP == 'false' && env.SKIP_TESTS == 'false' }}
       run: bash ./build-scripts/gha_test_only.sh
+    - name: Collect retry failure reports
+      if: ${{ always() && env.SKIP == 'false' && env.SKIP_TESTS == 'false' }}
+      id: retry
+      run: |
+        if [ -f retry_summary.txt ]; then
+          python3 tools/format_retry_comment.py \
+            --summary retry_summary.txt \
+            --job-title "${{ matrix.title }}" > retry_comment.md || true
+          if [ -s retry_comment.md ]; then
+            echo "has_failures=true" >> $GITHUB_OUTPUT
+          fi
+        fi
+    - name: Upload retry failure report
+      if: ${{ always() && steps.retry.outputs.has_failures == 'true' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: retry-failures-${{ matrix.title || 'unknown' }}
+        path: retry_comment.md
+        if-no-files-found: ignore
+        retention-days: 1
     - run: |
         echo ${{ github.event.number }} > pull_request_id
         echo "true" > ${{ env.ARCHIVE_SUCCESS }}

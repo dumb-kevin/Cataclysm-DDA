@@ -921,7 +921,7 @@ static std::map<std::string, swim_result> expected_results = {
     {"move: walk, stats: minimum, skills: professional, gear: none, traits: webbed hands and feet", swim_result{74, 364}},
 };
 
-TEST_CASE( "check_swim_move_cost_and_distance_values", "[swimming][slow]" )
+TEST_CASE( "check_swim_move_cost_and_distance_values", "[swimming][slow][retry]" )
 {
     setup_test_lake();
 
