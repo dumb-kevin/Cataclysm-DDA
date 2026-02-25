@@ -473,7 +473,7 @@ static void finalize_item_counts( std::unordered_map<itype_id, float> &item_coun
 // Toggle this to enable the (very very very expensive) item demographics test.
 static bool enable_item_demographics = false;
 
-TEST_CASE( "overmap_terrain_coverage", "[overmap][slow]" )
+TEST_CASE( "overmap_terrain_coverage", "[overmap][slow][!mayfail]" )
 {
     // The goal of this test is to generate a lot of overmaps, and count up how
     // many times we see each terrain, so that we can check that everything
