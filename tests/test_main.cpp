@@ -629,3 +629,10 @@ int main( int argc, const char *argv[] )
 
     return result;
 }
+
+// Temporary test to verify mayfail PR comment pipeline
+TEST_CASE( "mayfail_pipeline_test", "[!mayfail][!hide][.]" )
+{
+    INFO( "This test deliberately fails to verify the mayfail reporting pipeline" );
+    CHECK( 1 == 2 );
+}
