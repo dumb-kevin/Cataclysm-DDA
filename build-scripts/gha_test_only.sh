@@ -50,15 +50,15 @@ then
     fi
 
     # Run regular tests
-    [ -f "${bin_path}cata_test" ] && parallel ${parallel_opts} "run_test $(printf %q "${bin_path}")'/cata_test' '('{}')=> ' --user-dir=test_user_dir_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
-    [ -f "${bin_path}cata_test-tiles" ] && parallel ${parallel_opts} "run_test $(printf %q "${bin_path}")'/cata_test-tiles' '('{}')=> ' --user-dir=test_user_dir_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
+    [ -f "${bin_path}cata_test" ] && parallel ${parallel_opts} "run_test $(printf %q "${bin_path}")'/cata_test' '('{}')=> ' --user-dir=test_user_dir_{#} --mayfail-report=mayfail_cmake_{#}.json {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
+    [ -f "${bin_path}cata_test-tiles" ] && parallel ${parallel_opts} "run_test $(printf %q "${bin_path}")'/cata_test-tiles' '('{}')=> ' --user-dir=test_user_dir_{#} --mayfail-report=mayfail_cmake_tiles_{#}.json {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
 else
     export ASAN_OPTIONS=detect_odr_violation=1
     export UBSAN_OPTIONS=print_stacktrace=1
-    parallel -j "$num_test_jobs" ${parallel_opts} "run_test './tests/cata_test' '('{}')=> ' --user-dir=test_user_dir_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
+    parallel -j "$num_test_jobs" ${parallel_opts} "run_test './tests/cata_test' '('{}')=> ' --user-dir=test_user_dir_{#} --mayfail-report=mayfail_{#}.json {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
     if [ -n "$MODS" ]
     then
-        parallel -j "$num_test_jobs" ${parallel_opts} "run_test './tests/cata_test' 'Mods-('{}')=> ' $(printf %q "${MODS}") --user-dir=modded_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
+        parallel -j "$num_test_jobs" ${parallel_opts} "run_test './tests/cata_test' 'Mods-('{}')=> ' $(printf %q "${MODS}") --user-dir=modded_{#} --mayfail-report=mayfail_mods_{#}.json {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
     fi
 
     if [ -n "$TEST_STAGE" ]
@@ -70,7 +70,7 @@ else
         ./build-scripts/get_all_mods.py | \
             while read mods
             do
-                run_test ./tests/cata_test '(all_mods)=> ' '[force_load_game]' --user-dir=all_modded --mods="${mods}"
+                run_test ./tests/cata_test '(all_mods)=> ' '[force_load_game]' --user-dir=all_modded --mayfail-report=mayfail_all_mods.json --mods="${mods}"
             done
     fi
 fi
