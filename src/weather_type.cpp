@@ -1,6 +1,7 @@
 #include "weather_type.h"
 
 #include <deque>
+#include <list>
 
 #include "condition.h"
 #include "debug.h"
