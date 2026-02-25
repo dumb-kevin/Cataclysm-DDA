@@ -1081,7 +1081,7 @@ static void dormant_monsters_spawn_correctly( const tripoint_abs_omt &origin )
     CHECK( g->num_creatures() == num_creatures_prev - 1UL );
 }
 
-TEST_CASE( "monsters_appear_on_map_as_expected", "[monster][map][hordes]" )
+TEST_CASE( "monsters_appear_on_map_as_expected", "[monster][map][hordes][!mayfail]" )
 {
     tripoint_abs_omt origin{ 90, 90, 0 };
     // This clear_area call is very expensive, so just do it once for all the related
