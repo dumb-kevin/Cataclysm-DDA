@@ -324,6 +324,27 @@ jobs:
     - name: run tests
       if: ${{ env.SKIP == 'false' && env.SKIP_TESTS == 'false' }}
       run: bash ./build-scripts/gha_test_only.sh
+    - name: Collect mayfail failure reports
+      if: ${{ always() && env.SKIP == 'false' && env.SKIP_TESTS == 'false' }}
+      id: mayfail
+      run: |
+        shopt -s nullglob
+        json_files=(mayfail_*.json)
+        if [ ${#json_files[@]} -gt 0 ]; then
+          python3 tools/format_mayfail_comment.py "${json_files[@]}" \
+            --job-title "${{ matrix.title }}" > mayfail_comment.md || true
+          if [ -s mayfail_comment.md ]; then
+            echo "has_failures=true" >> $GITHUB_OUTPUT
+          fi
+        fi
+    - name: Upload mayfail failure report
+      if: ${{ always() && steps.mayfail.outputs.has_failures == 'true' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: mayfail-failures-${{ matrix.title || 'unknown' }}
+        path: mayfail_comment.md
+        if-no-files-found: ignore
+        retention-days: 1
     - run: |
         echo ${{ github.event.number }} > pull_request_id
         echo "true" > ${{ env.ARCHIVE_SUCCESS }}

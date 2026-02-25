@@ -38,41 +38,7 @@ function run_test
 }
 export -f run_test
 
-if [ "$CMAKE" = "1" ]
-then
-    bin_path="./"
-    if [ "$RELEASE" = "1" ]
-    then
-        build_type=MinSizeRel
-        bin_path="build/tests/"
-    else
-        build_type=Debug
-    fi
-
-    # Run regular tests
-    [ -f "${bin_path}cata_test" ] && parallel ${parallel_opts} "run_test $(printf %q "${bin_path}")'/cata_test' '('{}')=> ' --user-dir=test_user_dir_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
-    [ -f "${bin_path}cata_test-tiles" ] && parallel ${parallel_opts} "run_test $(printf %q "${bin_path}")'/cata_test-tiles' '('{}')=> ' --user-dir=test_user_dir_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
-else
-    export ASAN_OPTIONS=detect_odr_violation=1
-    export UBSAN_OPTIONS=print_stacktrace=1
-    parallel -j "$num_test_jobs" ${parallel_opts} "run_test './tests/cata_test' '('{}')=> ' --user-dir=test_user_dir_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
-    if [ -n "$MODS" ]
-    then
-        parallel -j "$num_test_jobs" ${parallel_opts} "run_test './tests/cata_test' 'Mods-('{}')=> ' $(printf %q "${MODS}") --user-dir=modded_{#} {}" ::: "[slow] ~starting_items" "~[slow] ~[.],starting_items"
-    fi
-
-    if [ -n "$TEST_STAGE" ]
-    then
-        # Run the tests with all the mods, without actually running any tests,
-        # just to verify that all the mod data can be successfully loaded.
-        # Because some mods might be mutually incompatible we might need to run a few times.
-
-        ./build-scripts/get_all_mods.py | \
-            while read mods
-            do
-                run_test ./tests/cata_test '(all_mods)=> ' '[force_load_game]' --user-dir=all_modded --mods="${mods}"
-            done
-    fi
-fi
+# TEMP: run only the mayfail pipeline verification test
+run_test './tests/cata_test' '=> ' --user-dir=test_user_dir_1 --mayfail-report=mayfail_1.json mayfail_pipeline_test
 
 # vim:tw=0

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <ostream>
@@ -62,6 +63,7 @@ static std::string user_dir;
 static bool dont_save{ false };
 static option_overrides_t option_overrides_for_test_suite;
 static std::string error_fmt = "human-readable";
+static std::string mayfail_report;
 
 static std::chrono::system_clock::time_point start_time;
 static std::chrono::system_clock::time_point end_time;
@@ -198,8 +200,99 @@ static option_overrides_t extract_option_overrides( const std::string_view optio
     return ret;
 }
 
+struct mayfail_assertion {
+    std::string file;
+    int line = 0;
+    std::string expression;
+    std::string expanded;
+    std::vector<std::string> messages;
+};
+
+struct mayfail_test_failure {
+    std::string test_name;
+    std::string tags;
+    std::vector<mayfail_assertion> assertions;
+};
+
+static std::string json_escape_string( const std::string &s )
+{
+    std::string out;
+    out.reserve( s.size() );
+    for( char c : s ) {
+        switch( c ) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                out += c;
+                break;
+        }
+    }
+    return out;
+}
+
+static void write_mayfail_json( const std::string &path,
+                                const std::vector<mayfail_test_failure> &failures )
+{
+    std::ofstream f( path );
+    if( !f.is_open() ) {
+        return;
+    }
+    f << "[\n";
+    for( size_t i = 0; i < failures.size(); ++i ) {
+        const mayfail_test_failure &fail = failures[i];
+        f << "  {\n";
+        f << "    \"test\": \"" << json_escape_string( fail.test_name ) << "\",\n";
+        f << "    \"tags\": \"" << json_escape_string( fail.tags ) << "\",\n";
+        f << "    \"assertions\": [\n";
+        for( size_t j = 0; j < fail.assertions.size(); ++j ) {
+            const mayfail_assertion &a = fail.assertions[j];
+            f << "      {\n";
+            f << "        \"file\": \"" << json_escape_string( a.file ) << "\",\n";
+            f << "        \"line\": " << a.line << ",\n";
+            f << "        \"expression\": \"" << json_escape_string( a.expression ) << "\",\n";
+            f << "        \"expanded\": \"" << json_escape_string( a.expanded ) << "\",\n";
+            f << "        \"messages\": [";
+            for( size_t k = 0; k < a.messages.size(); ++k ) {
+                f << "\"" << json_escape_string( a.messages[k] ) << "\"";
+                if( k + 1 < a.messages.size() ) {
+                    f << ", ";
+                }
+            }
+            f << "]\n";
+            f << "      }";
+            if( j + 1 < fail.assertions.size() ) {
+                f << ",";
+            }
+            f << "\n";
+        }
+        f << "    ]\n";
+        f << "  }";
+        if( i + 1 < failures.size() ) {
+            f << ",";
+        }
+        f << "\n";
+    }
+    f << "]\n";
+}
+
 struct CataListener : Catch::TestEventListenerBase {
     using TestEventListenerBase::TestEventListenerBase;
+
+    std::vector<mayfail_assertion> current_mayfail_assertions;
+    std::vector<mayfail_test_failure> all_mayfail_failures;
 
     void testRunStarting( Catch::TestRunInfo const & ) override {
         if( needs_game ) {
@@ -223,6 +316,28 @@ struct CataListener : Catch::TestEventListenerBase {
 
     void testRunEnded( Catch::TestRunStats const & ) override {
         end_time = std::chrono::system_clock::now();
+        if( !mayfail_report.empty() && !all_mayfail_failures.empty() ) {
+            write_mayfail_json( mayfail_report, all_mayfail_failures );
+        }
+    }
+
+    void testCaseStarting( Catch::TestCaseInfo const &testInfo ) override {
+        TestEventListenerBase::testCaseStarting( testInfo );
+        current_mayfail_assertions.clear();
+    }
+
+    void testCaseEnded( Catch::TestCaseStats const &testCaseStats ) override {
+        if( !current_mayfail_assertions.empty() ) {
+            mayfail_test_failure f;
+            f.test_name = testCaseStats.testInfo.name;
+            for( const std::string &tag : testCaseStats.testInfo.tags ) {
+                f.tags += "[" + tag + "]";
+            }
+            f.assertions = std::move( current_mayfail_assertions );
+            all_mayfail_failures.push_back( std::move( f ) );
+        }
+        current_mayfail_assertions.clear();
+        TestEventListenerBase::testCaseEnded( testCaseStats );
     }
 
     void sectionStarting( Catch::SectionInfo const &sectionInfo ) override {
@@ -270,6 +385,21 @@ struct CataListener : Catch::TestEventListenerBase {
             debug_write_backtrace( stream );
         }
 #endif
+
+        {
+            const Catch::AssertionResult &res = assertionStats.assertionResult;
+            if( currentTestCaseInfo && currentTestCaseInfo->okToFail() && !res.isOk() ) {
+                mayfail_assertion a;
+                a.file = res.getSourceInfo().file;
+                a.line = static_cast<int>( res.getSourceInfo().line );
+                a.expression = res.getExpressionInMacro();
+                a.expanded = res.getExpandedExpression();
+                for( const Catch::MessageInfo &msg : assertionStats.infoMessages ) {
+                    a.messages.push_back( msg.message );
+                }
+                current_mayfail_assertions.push_back( std::move( a ) );
+            }
+        }
 
         return TestEventListenerBase::assertionEnded( assertionStats );
     }
@@ -352,6 +482,9 @@ int main( int argc, const char *argv[] )
                  | Opt( limit_debug_level, "number" )
                  ["--set-debug-level-mask"]
                  ( "[CataclysmDDA] Set debug level bitmask - see `enum DebugLevel` in src/debug.h for individual bits definition" )
+                 | Opt( mayfail_report, "filename" )
+                 ["--mayfail-report"]
+                 ( "[CataclysmDDA] Write mayfail test failure report to this JSON file." )
                  ;
     session.cli( cli );
 
@@ -495,4 +628,11 @@ int main( int argc, const char *argv[] )
     }
 
     return result;
+}
+
+// Temporary test to verify mayfail PR comment pipeline -- remove after verification
+TEST_CASE( "mayfail_pipeline_test", "[!mayfail]" )
+{
+    INFO( "This test deliberately fails to verify the mayfail reporting pipeline" );
+    CHECK( 1 == 2 );
 }
