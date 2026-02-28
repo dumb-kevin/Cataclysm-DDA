@@ -828,7 +828,7 @@
       "bio_physical_buffs_fifth_sun",
       "bio_cameleoflage_fifth_sun"
     ],
-    "traits": [ "FIFTH_SUN_PEOPLE" ],
+    "traits": [ "FIFTH_SUN_PEOPLE", "CBM_Interface" ],
     "items": {
       "both": {
         "entries": [
