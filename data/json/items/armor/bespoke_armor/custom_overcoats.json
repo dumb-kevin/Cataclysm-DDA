@@ -12,7 +12,7 @@
     "price_postapoc": "20 USD",
     "material": [ "kevlar_layered", "nylon" ],
     "symbol": "[",
-    "looks_like": "armor_scavenger",
+    "looks_like": "armor_nomad",
     "color": "green",
     "armor": [
       {

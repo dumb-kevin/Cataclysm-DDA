@@ -3119,7 +3119,7 @@
     "price_postapoc": "300 USD",
     "material": [ "qt_steel", "ceramic", "kevlar_rigid" ],
     "symbol": "[",
-    "looks_like": "depowered_armor",
+    "looks_like": "combat_exoskeleton_light_salvaged",
     "color": "light_gray",
     "pocket_data": [
       {

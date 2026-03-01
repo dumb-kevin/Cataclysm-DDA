@@ -4659,7 +4659,7 @@
     "to_hit": { "grip": "bad", "length": "long", "surface": "any", "balance": "clumsy" },
     "material": [ "steel", "plastic" ],
     "symbol": "[",
-    "looks_like": "depowered_armor",
+    "looks_like": "combat_exoskeleton_light_salvaged",
     "color": "dark_gray",
     "pocket_data": [
       {
@@ -4693,7 +4693,7 @@
   {
     "id": "utility_exoskeleton_on",
     "copy-from": "utility_exoskeleton_off",
-    "looks_like": "power_armor_light",
+    "looks_like": "combat_exoskeleton_light",
     "type": "ITEM",
     "subtypes": [ "TOOL", "ARMOR" ],
     "name": { "str": "battery powered utility exoskeleton (on)", "str_pl": "battery powered utility exoskeletons (on)" },
@@ -4725,7 +4725,7 @@
     "to_hit": { "grip": "bad", "length": "long", "surface": "any", "balance": "clumsy" },
     "material": [ "steel", "plastic" ],
     "symbol": "[",
-    "looks_like": "depowered_armor",
+    "looks_like": "combat_exoskeleton_light_salvaged",
     "color": "dark_gray",
     "pocket_data": [ { "pocket_type": "MAGAZINE", "rigid": true, "watertight": true, "ammo_restriction": { "gasoline": 10000 } } ],
     "warmth": 0,
@@ -4753,7 +4753,7 @@
   {
     "id": "ice_utility_exoskeleton_on",
     "copy-from": "ice_utility_exoskeleton_off",
-    "looks_like": "power_armor_light",
+    "looks_like": "combat_exoskeleton_light",
     "type": "ITEM",
     "subtypes": [ "TOOL", "ARMOR" ],
     "name": { "str": "ICE utility exoskeleton (on)", "str_pl": "ICE utility exoskeletons (on)" },

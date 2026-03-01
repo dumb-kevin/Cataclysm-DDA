@@ -702,7 +702,7 @@
     "price_postapoc": "30 USD",
     "material": [ "fancy_bronze", "leather" ],
     "symbol": "[",
-    "looks_like": "chainmail_legs",
+    "looks_like": "mc_chainmail_legs",
     "color": "brown",
     "warmth": 18,
     "material_thickness": 5,

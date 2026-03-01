@@ -1578,7 +1578,7 @@
     "price_postapoc": "2 USD",
     "material": [ "cotton" ],
     "symbol": "[",
-    "looks_like": "jacket",
+    "looks_like": "jacket_light",
     "color": "dark_gray",
     "armor": [
       { "covers": [ "torso" ], "coverage": 100, "encumbrance": [ 6, 8 ] },

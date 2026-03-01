@@ -55,7 +55,7 @@
   },
   {
     "id": "staff_sling",
-    "looks_like": "quarterstaff",
+    "looks_like": "q_staff",
     "type": "ITEM",
     "subtypes": [ "GUN" ],
     "symbol": "(",

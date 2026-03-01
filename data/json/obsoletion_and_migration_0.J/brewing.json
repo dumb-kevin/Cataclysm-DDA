@@ -33,7 +33,7 @@
     "type": "ITEM",
     "subtypes": [ "COMESTIBLE" ],
     "id": "soaking_dandelion",
-    "looks_like": "dandelion",
+    "looks_like": "raw_dandelion",
     "name": { "str_sp": "soaking dandelion (obsolete)" },
     "weight": "308 g",
     "color": "brown",

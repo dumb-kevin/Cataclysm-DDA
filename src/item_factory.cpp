@@ -2436,6 +2436,12 @@ void Item_factory::check_definitions() const
                                       type->default_container->c_str() );
             }
         }
+        if( !type->looks_like.is_empty() && !has_template( type->looks_like ) &&
+            !furn_str_id( type->looks_like.str() ).is_valid() &&
+            !ter_str_id( type->looks_like.str() ).is_valid() &&
+            !trap_str_id( type->looks_like.str() ).is_valid() ) {
+            msg += string_format( "invalid looks_like %s\n", type->looks_like.c_str() );
+        }
         if( !type->repairs_like.is_empty() && !has_template( type->repairs_like ) ) {
             msg += string_format( "invalid repairs_like %s\n", type->repairs_like.c_str() );
         }

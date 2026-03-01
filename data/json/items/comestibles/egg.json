@@ -1058,7 +1058,7 @@
     "name": { "str_sp": "rehydrated egg" },
     "color": "yellow",
     "symbol": "%",
-    "looks_like": "powder_egg",
+    "looks_like": "powder_eggs",
     "quench": 2,
     "description": "Rehydrated eggs.  You can use them instead of eggs when cooking, provided you don't care that they have lost their complete shape.",
     "price": "22 cent",

@@ -2710,7 +2710,7 @@
     "type": "ITEM",
     "subtypes": [ "ARMOR" ],
     "copy-from": "mc_chainmail_feet",
-    "looks_like": "chainmail_feet",
+    "looks_like": "mc_chainmail_feet",
     "name": { "str_sp": "medium steel chainmail chausses (pair)" },
     "proportional": { "weight": 0.75, "volume": 0.75, "price": 0.5 },
     "extend": { "flags": [ "UNDERSIZE", "PREFIX_XS" ] }

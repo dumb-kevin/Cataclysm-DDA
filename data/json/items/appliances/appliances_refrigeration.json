@@ -2,7 +2,7 @@
   {
     "type": "ITEM",
     "id": "apartment_fridge",
-    "looks_like": "fridge",
+    "looks_like": "display_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "household fridge" },
@@ -58,7 +58,7 @@
   {
     "type": "ITEM",
     "id": "glass_fridge",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "single glass door fridge" },
@@ -78,7 +78,7 @@
   {
     "type": "ITEM",
     "id": "glass_fridge_double",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "double glass door fridge" },
@@ -98,7 +98,7 @@
   {
     "type": "ITEM",
     "id": "heavy_duty_fridge",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "heavy-duty fridge" },
@@ -117,7 +117,7 @@
   {
     "type": "ITEM",
     "id": "display_fridge",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "display fridge" },
@@ -136,7 +136,7 @@
   {
     "type": "ITEM",
     "id": "apartment_freezer",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "household freezer" },
@@ -239,7 +239,7 @@
   {
     "type": "ITEM",
     "id": "glass_freezer",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "glass door freezer" },
@@ -259,7 +259,7 @@
   {
     "type": "ITEM",
     "id": "display_freezer",
-    "looks_like": "fridge",
+    "looks_like": "apartment_fridge",
     "symbol": "F",
     "color": "light_blue",
     "name": { "str": "display freezer" },

@@ -78,7 +78,7 @@
     "id": "armor_cardboard_cuirass",
     "type": "ITEM",
     "subtypes": [ "ARMOR" ],
-    "looks_like": "hoodie_brown",
+    "looks_like": "hoodie",
     "name": { "str": "cardboard cuirass", "str_pl": "cardboard cuirasses" },
     "category": "armor",
     "description": "While this isn't quite the 'heavy ballistic vest' the blueprints pretend it is, the layering makes it almost passable as a form of extremely rudimentary armor.  It's still nowhere near as good as basically any other choice, while still being hard to move around in.",

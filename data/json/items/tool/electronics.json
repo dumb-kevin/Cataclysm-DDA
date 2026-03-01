@@ -80,7 +80,7 @@
     "type": "ITEM",
     "subtypes": [ "TOOL" ],
     "name": { "str": "memory card" },
-    "looks_like": "mobile_memory_card",
+    "looks_like": "memory_card_unread",
     "ascii_picture": "memory_card",
     "weight": "1 g",
     "volume": "1 ml",

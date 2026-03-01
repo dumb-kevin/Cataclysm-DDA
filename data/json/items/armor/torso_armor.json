@@ -589,7 +589,7 @@
     "material": [ "lc_steel" ],
     "repairs_with": [ "steel" ],
     "symbol": "H",
-    "looks_like": "chestguard_metal",
+    "looks_like": "chestguard_metal_sheets",
     "color": "light_gray",
     "warmth": 5,
     "longest_side": "50 cm",

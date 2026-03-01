@@ -160,7 +160,7 @@
     "subtypes": [ "TOOL", "ARMOR", "ARTIFACT" ],
     "name": { "str": "combat exoskeleton mk1", "str_pl": "combat exoskeletons mk1" },
     "description": "Colloquially known as a 'tank suit' in the media, these first-generation exoskeletons were tested in military service a few years back and determined to be too expensive for regular use.  The exoskeleton itself is strapped on an environmental suit with an integrated life-support system.  A variety of webbing, magnets, and clips allows the attachment of special armor plating onto the frame.",
-    "looks_like": "power_armor_heavy",
+    "looks_like": "combat_exoskeleton_medium",
     "use_action": {
       "type": "transform",
       "msg": "You turn the exoskeleton on.\n>>Initiating boot sequence…\n//Loading DoubleOS v1.38…\n//Loading calibration profile…\n//Activating atmospheric filtration…\n//Activating liquid cooling…\n//Activating sound dampeners…\n>>Boot successful.",
@@ -374,7 +374,7 @@
     "subtypes": [ "TOOL", "ARMOR", "ARTIFACT" ],
     "name": { "str": "combat exoskeleton mk3", "str_pl": "combat exoskeletons mk3" },
     "description": "The final iteration of military power armor before the fall of civilization, this version was designed for actual widespread combat use and was seen on the front lines during the last days of the Cataclysm, unfortunately, the world ended before it could roll out in significant numbers.  The exoskeleton itself is strapped on an environmental suit with an integrated life-support system.  A variety of webbing, magnets, and clips allows the attachment of special armor plating onto the frame.",
-    "looks_like": "power_armor_light",
+    "looks_like": "combat_exoskeleton_medium",
     "use_action": {
       "type": "transform",
       "msg": "You turn the exoskeleton on.\n>>Initiating boot sequence…\n//Loading DoubleOS v3.51…\n//Loading calibration profile…\n//Activating atmospheric filtration…\n//Activating liquid cooling…\n//Activating sound dampeners…\n>>Boot successful.",
@@ -481,7 +481,7 @@
     "subtypes": [ "ARMOR" ],
     "name": { "str": "salvaged combat exoskeleton mk3" },
     "description": "This is supposed to be a combat exoskeleton of third generation but its environmental suit is severely damaged and the mechanical components are non functional.  A variety of webbing, magnets, and clips allows the attachment of special armor plating onto the frame.",
-    "looks_like": "power_armor_light",
+    "looks_like": "combat_exoskeleton_light",
     "proportional": { "volume": 0.5, "weight": 0.5, "price": 0.1, "price_postapoc": 0.1 },
     "warmth": 0,
     "environmental_protection": 0,
