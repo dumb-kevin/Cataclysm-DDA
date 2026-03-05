@@ -1,5 +1,8 @@
+#include <algorithm>
+#include <map>
 #include <memory>
 
+#include "debug.h"
 #include "talker_topic.h"
 
 std::vector<std::string> talker_topic_const::get_topics( bool ) const

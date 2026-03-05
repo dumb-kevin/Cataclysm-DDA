@@ -1,9 +1,14 @@
 #include "weather_type.h"
 
+#include <algorithm>
+#include <map>
+#include <vector>
+
 #include "condition.h"
 #include "debug.h"
 #include "flexbuffer_json.h"
 #include "generic_factory.h"
+#include "string_formatter.h"
 
 namespace
 {
